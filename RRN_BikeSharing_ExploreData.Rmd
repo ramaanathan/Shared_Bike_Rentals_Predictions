@@ -1,0 +1,247 @@
+---
+title: "Bike Sharing"
+author: "Ramaa Nathan"
+date: "7/25/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(utils) #to read csv files
+library(ggplot2) #for ggplot
+library(base) #for strptime
+library(car) #for vif
+library(MASS)
+```
+
+```
+Project Goal
+You are provided hourly rental data spanning two years. For this competition, the training set (train.csv) is comprised of the first 19 days of each month, while the test set (test.csv) is the 20th to the end of the month. You must predict the total count of bikes rented during each hour covered by the test set, using only information available prior to the rental period.
+```
+
+```{r}
+bikeTrain = read.csv("train.csv",header=TRUE,sep=",")
+str(bikeTrain)
+bikeTest = read.csv("test.csv",header=TRUE,sep=",")
+str(bikeTest)
+
+```
+
+```
+Data Descriptions:
+   1. datetime - hourly date + timestamp  
+   2. season - (actually categorical - ordinal) 
+      1 = spring, 2 = summer, 3 = fall, 4 = winter 
+   3. holiday - whether the day is considered a holiday
+   4. workingday - whether the day is neither a weekend nor holiday
+   5. weather - (categorical - ordinal)
+      1: Clear, Few clouds, Partly cloudy, Partly cloudy 
+      2: Mist + Cloudy, Mist + Broken clouds, Mist + Few clouds, Mist 
+      3: Light Snow, Light Rain + Thunderstorm + Scattered clouds, Light Rain + Scattered clouds 
+      4: Heavy Rain + Ice Pallets + Thunderstorm + Mist, Snow + Fog 
+   6. temp - temperature in Celsius
+   7. atemp - "feels like" temperature in Celsius (function of humidity and windspeed)
+   8. humidity - relative humidity
+   9. windspeed - wind speed
+   10. casual - number of non-registered user rentals initiated
+   11. registered - number of registered user rentals initiated
+   12. count - number of total rentals
+
+Casual, Registered, and Count are all response variables. Count is sum of Casual+Registered
+
+The  pair of indicator variables, holiday and working day, together indicate if the day is a working day, holiday, or a weekend.
+
+```
+```{r}
+#For data exploration purposes, we will combine the training and test data sets.
+bikeRentals = as.data.frame(rbind(bikeTrain[,1:9],bikeTest[]))
+str(bikeRentals)
+```
+
+Check for missing data
+```{r}
+summary(bikeRentals)
+#check for na
+any(is.na(bikeRentals))
+#check for duplicates
+any(duplicated(bikeRentals))
+```
+
+
+```{r}
+#check distribution of all the numeric data in the combined data sets
+par(mfrow=c(3,3))
+for (i in which(sapply(bikeRentals,is.numeric))) {
+  hist(bikeRentals[,i],freq=TRUE,xlab=colnames(bikeRentals)[i],main="")
+}
+par(mfrow=c(1,1))
+```
+
+```{r}
+#check for combinations of holiday and workginday
+with(bikeRentals,unique(cbind(holiday,workingday)))
+#number of entries for holiday (note this includes multiple entries per day)
+with(bikeRentals,sum(holiday))
+#number of entries for holiday (note this includes multiple entries per day)
+with(bikeRentals,sum(workingday))
+```
+
+Season is categorical (nominal) varaible indicate the four seasons.
+Holiday - Binary variable - is it a public holiday? - Does not include weekends
+Working Day - one of the five working days in a week, which are not holidays. So, a day that is neither a holiday nor a working day can be considered to be a weekend
+```{r}
+#separate out the time from timestamp
+#extract the hour in each observation
+bikeTrain$datetime <- strptime(bikeTrain$datetime, format="%Y-%m-%d %H:%M:%S")
+bikeTrain$hour = bikeTrain$datetime$hour
+
+#put hours into bins
+bikeTrain$hourBins = cut(bikeTrain$hour,c(0,6,10,13,16,20,24),labels=c("0-5","6-9","10-12","13-15","16-19","20-24"),right=FALSE)
+```
+
+
+###Plots
+```{r}
+ggplot(bikeTrain,aes(x=season,y=count)) + 
+  geom_point() + 
+  ggtitle("Rental vs Season") +  
+  scale_x_discrete(limits=c("Spring","Summer","Fall","Winter"))+
+  labs(x="Season", y="Count of bikes rented")
+```
+```
+observation - bikes are rented every season - though there seem to be a few days in the fall when more bikes are rented.
+```
+```{r}
+ggplot(bikeTrain,aes(x=weather,y=count)) + 
+  geom_point() + 
+  ggtitle("Rental vs Weather") +  
+  scale_x_discrete(limits=c("Clear","Cloudy","Light Rain/Snow", "Snow/Heavy Rain")) +
+  labs(x="Weather", y="Count of bikes rented")
+```
+```
+observation - bike rental very much depends on weather. Highest bike rentals occur during clear weather and almost no bikes are rented during really bad or inclement weather
+```
+```{r}
+# - 1:weekend; 2:holiday; 3:workingday
+ggplot(bikeTrain,aes(x=holiday+(2*workingday)+1,y=count)) + 
+  geom_point() + 
+  ggtitle("Rental vs Type of Day") +  
+  scale_x_discrete(limits=c("Weekend","Holiday","Working Day")) +
+  labs(x="Type of Day", y="Count of bikes rented")
+  
+```
+```
+observation:  many more bikes are rented on working days than on a weekend. Least number of bikes are rented on holidays.
+```
+
+```{r}
+ggplot(bikeTrain,aes(x=temp,y=atemp)) + 
+  geom_point() + 
+  ggtitle("Actual Temp vs Feel Temp") +
+  labs(x="Actual Temperature", y="Feeling Temperature") 
+
+ggplot(bikeTrain,aes(x=atemp,y=count,colour=bikeTrain$hourBins)) + 
+  geom_point() + 
+  ggtitle("Count vs Feel Temp") +
+  labs(x="Actual Temperature", y="Count") 
+```
+```
+observation: When the temperature is between 15degC and 25 degC, there is no difference between the actual and feeling temperature. There is a variation between the two types of temperature at higher and lower temperatures. But, it also evident that the two temperatures are highly correlated. So, while modeling, we should consider only one of them. As the bike sharing is an outdoor activity, it may make sense to use the atemp or feeling temperature.
+```
+```{r}
+ggplot(bikeTrain,aes(x=casual,y=registered)) + 
+  geom_point() + 
+  ggtitle("Casual vs Registered Renters") +
+  labs(x="Unregistered Renters", y="Registered Renters") 
+```
+
+```{r}
+#bikeTrain$Hour = substr(bikeTrain$datetime, 12, 13) # extract Hour of rental
+bikeTrain$TypeOfDay = bikeTrain$holiday+(2*bikeTrain$workingday)+1
+bikeTrain$TypeOfDay = as.factor(bikeTrain$TypeOfDay)
+levels(bikeTrain$TypeOfDay)=c("Weekend","Holiday","Working Day")
+ggplot(bikeTrain,aes(x=hour,y=count,colour=TypeOfDay)) + 
+  geom_point() + 
+  ggtitle("Rental by Time of Day") +
+  labs(x="Hour of Day", y="Count of bikes rented") 
+```
+```
+Observation: When observed by the hour of the day, bikes are rented at all hours of the day with the highest number of bikes being rented at the 8am hour and from 5pm to 7pm on working days. This clearly indicates that bikes are rented as commutes to and from work.
+```
+```{r}
+weatherF = as.factor(bikeTrain$weather)
+levels(weatherF)=c("Clear","Cloudy","Light Rain/Snow", "Snow/Heavy Rain")
+ggplot(bikeTrain,aes(x=hour,y=count,colour=weatherF)) + 
+  geom_point() + 
+  ggtitle("Rental by Time of Day") +
+  labs(x="Hour of Day", y="Count of bikes rented") 
+```
+```
+Observation: When observed by the hour of the day, bikes are rented during late hours of the day when the weather is either clear or cloudy. Bikes are rented during light rain only during the middle of the day.
+```
+```{r}
+seasonF = as.factor(bikeTrain$season)
+levels(seasonF)=c("Spring","Summer","Fall","Winter")
+ggplot(bikeTrain,aes(x=hour,y=count,colour=seasonF)) + 
+  geom_point() + 
+  ggtitle("Rental by Time of Day") +
+  labs(x="Hour of Day", y="Count of bikes rented") 
+```
+```
+Observation - It seems counter-intuitive that mode number of bikes are rented during the winter than in spring
+```
+```
+Based on all the observations, there seems to be an interaction between the hours of the day, the weather, and whether it is a holiday. This will need to be verified using the different models
+
+Approaches:
+   1. Multiple Linear Regression
+      a. Do Residual Analysis
+   2. Feature Reductin - using subseet regression
+   3. Apply Regularization 
+      a. Ridge
+      b. Lasso
+   4. PCR
+   5. PLS
+   6. Random Forests
+   7. Boosting
+   8. Additive Models
+   
+In all cases, apply cross validation and pick the best values.
+Compare all the errors and determine the accuracy
+
+*B IMportant to note that we can predict only using the previous training values *B
+
+```
+```{r}
+#extract the dates -- playing around with the strptime function - this subsection not needed for analysis
+dates = substr(bikeTrain$datetime, 1, 10) # extract Hour of rental
+uniqueDates = unique(dates) 
+#uniqueDates
+
+bikeTrain$datetime <- strptime(bikeTrain$datetime, format="%Y-%m-%d %H:%M:%S")
+
+bikeTrain$year = bikeTrain$datetime$year
+bikeTrain$mon = bikeTrain$datetime$mon #Jan is represented as 0, Dec as 11 - months() - prints name
+bikeTrain$mday = bikeTrain$datetime$mday #0-31 -- 
+bikeTrain$hour = bikeTrain$datetime$hour #0-23 hours 
+#head(bikeTrain$datetime$min) #0-59  minutes
+#head(bikeTrain$datetime$sec) #0-61 seconds
+bikeTrain$wday = bikeTrain$datetime$wday #0-6 das of the week: weekdays() prints name
+```
+
+```{r}
+
+```
+
+
+```{r}
+#Check correlations between the numeric variables.
+ cor(cbind(temp=bikeTrain$temp,atemp=bikeTrain$atemp,humidity=bikeTrain$humidity,windspeed=bikeTrain$windspeed))
+
+```
+```
+Observation: Temp and atemp are highy correlated - causing multicollinearity. So, we would not want to include both variables in the model. As perople tend to do outdoor activities by the "feeling temperature" rather the actual, we will only use atemp.
+```
+
+
+

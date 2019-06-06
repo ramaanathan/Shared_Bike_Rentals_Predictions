@@ -1,0 +1,432 @@
+---
+title: "FinalProject_s"
+author: "Ramaa Nathan"
+date: "8/4/2018"
+output: html_document
+---
+
+Version b: This version contains the 24 data sets and the modeling of the gam models for all the 24 datasets
+Version c: This version removes season, cleans up the dataset - factors all the categorical variables and uses stratified partitioning within each dataset; random forests and boosting implemented
+Version d: Added the second test dataset that also has the counts
+Version e: Added analysis for each model
+version f: partitioned the test data sets too
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret) #for cross validations
+library(knitr)
+library(ggplot2) #for plots
+library(gam) #for gam models
+library(randomForest)
+library(gbm) #for boosting
+library(plyr) #for do.call 
+library(car) #for vif
+```
+
+```{r 1}
+bikeTrain = read.csv("train.csv",header=TRUE,sep=",")
+bikeTest = read.csv("test.csv",header=TRUE,sep=",")
+str(bikeTrain)
+```
+
+Extract the details of the time variables
+```{r 2}
+bikeTrain$datetime <- strptime(bikeTrain$datetime, format="%Y-%m-%d %H:%M:%S")
+bikeTrain$year = bikeTrain$datetime$year
+bikeTrain$mon = bikeTrain$datetime$mon #Jan is represented as 0, Dec as 11 - months() - prints name
+#create factor variables of year and month
+bikeTrain$yearf=as.factor(bikeTrain$year)
+bikeTrain$monf=as.factor(bikeTrain$mon)
+bikeTrain$hour = as.factor(bikeTrain$datetime$hour)
+bikeTrain$mday = as.factor(bikeTrain$datetime$mday) #0-31 -- 
+#bikeTrain$mday = bikeTrain$datetime$mday
+bikeTrain$hour = as.factor(bikeTrain$datetime$hour) #0-23 hours 
+#head(bikeTrain$datetime$min) #0-59  minutes
+#head(bikeTrain$datetime$sec) #0-61 seconds
+bikeTrain$wday = as.factor(bikeTrain$datetime$wday) #0-6 das of the week: weekdays() prints name
+```
+
+
+Convert categorical predictors from numerical to factor data type
+```{r 3}
+#additional columns
+#create factor variables for train set
+bikeTrain$typeofday = as.factor(bikeTrain$holiday+(2*bikeTrain$workingday)+1)
+levels(bikeTrain$typeofday)=c("Weekend","Holiday","Working Day")
+bikeTrain$season = factor(bikeTrain$season)
+levels(bikeTrain$season)=c("Spring","Summer","Fall","Winter")
+bikeTrain$weather = as.factor(bikeTrain$weather)
+levels(bikeTrain$weather)=c("Clear","Cloudy","Light Rain/Snow", "Snow/Heavy Rain")
+#str(bikeTrain)
+#remove unwanted columns
+bikeTrain = within(bikeTrain,rm(holiday,workingday,casual,registered,datetime,temp))
+bikeTrain$name = ""
+str(bikeTrain)
+#knit_exit()
+```
+
+Create and transform the test dataset now
+```{r 4}
+#remove entry with first in the year 2011
+bikeTest=bikeTest[-which(row.names(bikeTest)==586),]
+
+bikeTest$datetime <- strptime(bikeTest$datetime, format="%Y-%m-%d %H:%M:%S")
+bikeTest$year = bikeTest$datetime$year
+bikeTest$mon = bikeTest$datetime$mon #Jan is represented as 0, Dec as 11 - months() - prints name
+#create factor variables of year and month
+bikeTest$yearf=as.factor(bikeTest$year)
+bikeTest$monf=as.factor(bikeTest$mon)
+bikeTest$mday = as.factor(bikeTest$datetime$mday) #0-31 -- 
+#bikeTest$mday = bikeTest$datetime$mday #0-31 -- 
+bikeTest$hour = as.factor(bikeTest$datetime$hour) #0-23 hours 
+#head(bikeTest$datetime$min) #0-59  minutes
+#head(bikeTest$datetime$sec) #0-61 seconds
+bikeTest$wday = as.factor(bikeTest$datetime$wday) #0-6 das of the week: weekdays() prints name
+
+#Convert categorical predictors from numerical to factor data type
+#additional columns
+#create factor variables for Test set
+bikeTest$typeofday = as.factor(bikeTest$holiday+(2*bikeTest$workingday)+1)
+levels(bikeTest$typeofday)=c("Weekend","Holiday","Working Day")
+bikeTest$season = factor(bikeTest$season)
+levels(bikeTest$season)=c("Spring","Summer","Fall","Winter")
+bikeTest$weather = as.factor(bikeTest$weather)
+levels(bikeTest$weather)=c("Clear","Cloudy","Light Rain/Snow", "Snow/Heavy Rain")
+#remove unwanted columns
+bikeTest = within(bikeTest,rm(holiday,workingday,casual,registered,datetime,temp))
+bikeTest$name = ""
+bikeTest$count = rep(0,nrow(bikeTest))
+#str(bikeTest)
+```
+
+
+
+```{r 5}
+#read the data from the UCI dataset that contains the counts for the testset too
+fulldata = read.csv("hour_fullset.csv",header=TRUE,sep=",",stringsAsFactors=FALSE)
+bikeTest2 = fulldata[which(strptime(fulldata$datetime, format="%Y-%m-%d %H:%M:%S")$mday > 19),]
+#remove entry with snow in the first month of 2011
+bikeTest2=bikeTest2[-which(row.names(bikeTest2)==586),]
+
+
+#Create and transform the new test dataset now
+bikeTest2$datetime <- strptime(bikeTest2$datetime, format="%Y-%m-%d %H:%M:%S")
+bikeTest2$year = bikeTest2$datetime$year
+bikeTest2$mon = bikeTest2$datetime$mon #Jan is represented as 0, Dec as 11 - months() - prints name
+#create factor variables of year and month
+bikeTest2$yearf=as.factor(bikeTest2$year)
+bikeTest2$monf=as.factor(bikeTest2$mon)
+bikeTest2$hour = as.factor(bikeTest2$datetime$hour)
+bikeTest2$mday = as.factor(bikeTest2$datetime$mday) #0-31 -- 
+#bikeTest2$mday = bikeTest2$datetime$mday #0-31 -- 
+bikeTest2$hour = as.factor(bikeTest2$datetime$hour) #0-23 hours 
+#head(bikeTest2$datetime$min) #0-59  minutes
+#head(bikeTest2$datetime$sec) #0-61 seconds
+bikeTest2$wday = as.factor(bikeTest2$datetime$wday) #0-6 das of the week: weekdays() prints name
+
+#Convert categorical predictors from numerical to factor data type
+#additional columns
+#create factor variables for Test set
+bikeTest2$typeofday = as.factor(bikeTest2$holiday+(2*bikeTest2$workingday)+1)
+levels(bikeTest2$typeofday)=c("Weekend","Holiday","Working Day")
+bikeTest2$season = factor(bikeTest2$season)
+levels(bikeTest2$season)=c("Spring","Summer","Fall","Winter")
+bikeTest2$weather = as.factor(bikeTest2$weather)
+levels(bikeTest2$weather)=c("Clear","Cloudy","Light Rain/Snow", "Snow/Heavy Rain")
+#remove unwanted columns
+bikeTest2 = within(bikeTest2,rm(holiday,workingday,casual,registered,datetime,temp))
+#remove row with snow in jan 2011
+
+
+str(bikeTest2)
+#knit_exit()
+```
+
+```{r 6}
+#create the multiple datasets
+unique(bikeTrain$yearf)
+unique(bikeTrain$monf)
+#split the train data by the factor variables yearf, monf
+bikeTrainSets = split(bikeTrain,list(bikeTrain$yearf,bikeTrain$monf))
+
+#create the strings on which the split was done to help build the growing sets of datasets
+#combine year and mon - cannot use factor variables directly in cbind
+yearmon = cbind(bikeTrain$year,bikeTrain$mon)
+#yearmon = cbind(levels(bikeTrain$yearf),levels(bikeTrain$monf))
+#order the columsn first by year and then by column
+yearmons = unique(yearmon[order(yearmon[,1],yearmon[,2],decreasing = FALSE),])
+#yearmons
+#combine the ordered entries into a string
+splitString=paste(yearmons[,1],'.',yearmons[,2],sep="")
+#splitString
+
+#create an incremental list of dataframes - incremental in the data elements
+bikeTrainIncrList = list() 
+prevBikeTrain = data.frame()
+for(i in splitString) {
+  #print(bikeTrainSets[[i]])
+  bikeTrainIncrList[[i]] = rbind(prevBikeTrain,bikeTrainSets[[i]])
+  prevBikeTrain = bikeTrainIncrList[[i]]
+  bikeTrainIncrList[[i]]$name = i
+}
+
+#check that each element in the list is a dataframe and combines the data from the previous months
+# start of print functions
+#sapply(bikeTrainIncrList,FUN=str)
+#sapply(bikeTrainIncrList,FUN=function(x) unique(cbind(x$yearf,x$monf)))
+#length(bikeTrainIncrList)
+#end of print functions
+#knit_exit()
+```
+
+
+```{r 7}
+#for each entry in biketest, determine the corresponding model that needs to be used
+getYearMon = function(x) {
+  #print(paste(trimws(x["year"]),'.',trimws(x["mon"]),sep=""))
+  return(paste(trimws(x["year"]),'.',trimws(x["mon"]),sep=""))
+}
+set.seed(1)
+testSample = bikeTest[sample(nrow(bikeTest),30),]
+#apply(testSample, MARGIN=1, FUN=function(x) getYearMon(x))
+matchTrainList = apply(testSample, MARGIN=1, FUN=function(x) bikeTrainIncrList[[getYearMon(x)]])
+
+#start of print functions....
+#str(matchTrainList)
+#sapply(seq(30),FUN=function(x) cbind(testSample$year[x],testSample$mon[x],unique(cbind(matchTrainList[[x]]$year,matchTrainList[[x]]$mon))))#
+#end of print functions...
+
+#check the same for bikeTest2
+testSample2 = bikeTest2[sample(nrow(bikeTest2),30),]
+matchTrainList2 = apply(testSample2, MARGIN=1, FUN=function(x) bikeTrainIncrList[[getYearMon(x)]])
+
+#start of print functions....
+#str(matchTrainList)
+#sapply(seq(30),FUN=function(x) cbind(testSample2$year[x],testSample2$mon[x],unique(cbind(matchTrainList2[[x]]$year,matchTrainList2[[x]]$mon))))#
+#end of print functions ....
+#knit_exit()
+```
+
+
+```{r 8}
+#apply data models  - lm
+ func_fit_lm = function(trainset,testset,factorpreds,dname) {
+   #create the formula string
+   formula_string = paste("count~",factorpreds,"+atemp+humidity+windspeed",sep="")
+   print(formula_string)
+  fit_lm = lm(as.formula(formula_string),data=trainset)
+  trainerror = mean((trainset$count - predict(fit_lm,newdata=trainset))^2)
+  testerror = mean((testset$count - predict(fit_lm,newdata=testset))^2)
+  #print(c(trainerror,testerror))
+  cat("dataset=",dname,"model=lm","trainerror=",trainerror,"testerror=",testerror)
+  
+  #analyse the result
+  summary(fit_lm)
+  #vif(fit_lm)
+  anova(fit_lm)
+  par(mfrow=c(2,2))
+  plot(fit_lm)
+  par(mfrow=c(1,1))
+  #print(list("model"="lm","trainerror"=trainerror,"testerror"=testerror))
+  return(list("dataset"=unique(trainset$name),"model"="lm","trainerror"=trainerror,"testerror"=testerror,"fit"=fit_lm))
+    
+ }
+```
+
+
+```{r 9}
+ func_fit_gam_lm = function(trainset,testset,factorpreds,dname) {
+   #print(dim(trainset))
+   #create the formula string
+   formula_string = paste("count~",factorpreds,"+atemp+humidity+windspeed",sep="")
+   print(formula_string)
+   
+   fit_gam_lm = gam(as.formula(formula_string),data=trainset)
+   print(summary(fit_gam_lm))
+   
+   trainerror = mean((trainset$count - predict(fit_gam_lm,newdata=trainset)) ^2)
+   testerror = mean((testset$count - predict(fit_gam_lm,newdata=testset))^2)
+ 
+   cat("dataset=",dname,"model=gam_lm","trainerror=",trainerror,"testerror=",testerror)
+   plot.Gam(fit_gam_lm, se=TRUE, col="green")
+
+   return(list("dataset"=unique(trainset$name),"model"="gam_lm","trainerror"=trainerror,"testerror"=testerror,"fit"=fit_gam_lm))
+ }
+```
+
+
+```{r 10}
+ func_fit_gam_poly = function(trainset,testset,factorpreds,dname) {
+   print(dim(trainset))
+   formula_string_2 = paste("count~",factorpreds,"+poly(atemp,2)+poly(humidity,2)+poly(windspeed,2)",sep="")
+   fit_gam_poly_2 = gam(as.formula(formula_string_2),data=trainset)
+   
+   formula_string_3 = paste("count~",factorpreds,"+poly(atemp,3)+poly(humidity,3)+poly(windspeed,3)",sep="")
+   fit_gam_poly_3 = gam(as.formula(formula_string_3),data=trainset)
+  
+    formula_string_4 = paste("count~",factorpreds,"+poly(atemp,4)+poly(humidity,4)+poly(windspeed,4)",sep="")
+   fit_gam_poly_4 = gam(as.formula(formula_string_4),data=trainset)
+   
+   formula_string_5 = paste("count~",factorpreds,"+poly(atemp,5)+poly(humidity,5)+poly(windspeed,5)",sep="")
+   fit_gam_poly_5 = gam(as.formula(formula_string_5),data=trainset)
+   
+   #compare the different poly models
+   print(summary(fit_gam_poly_2))
+   print(summary(fit_gam_poly_3))
+   print(summary(fit_gam_poly_4))
+   print(summary(fit_gam_poly_5))
+   print(anova(fit_gam_poly_2,fit_gam_poly_3,fit_gam_poly_4,fit_gam_poly_5))
+   #observation - ploy_3 seems to be the best fit in general
+
+   trainerror = mean((trainset$count - predict(fit_gam_poly_3,newdata=trainset))^2)
+   testerror = mean((testset$count - predict(fit_gam_poly_3,newdata=testset))^2)
+
+  cat("dataset=",dname,"model=gam_poly","trainerror=",trainerror,"testerror=",testerror)
+
+   return(list("dataset"=unique(trainset$name),"model"="gam_poly","trainerror"=trainerror,"testerror"=testerror,"fit"=fit_gam_poly_3))
+}
+```
+
+
+```{r 11}
+ func_fit_gam_s = function(trainset,testset,factorpreds,dname) {
+    formula_string = paste("count~",factorpreds,"+s(atemp)+s(humidity)+s(windspeed)",sep="")
+  print(formula_string)
+    fit_gam_s = gam(as.formula(formula_string),data=trainset)
+   trainerror = mean((trainset$count-predict(fit_gam_s,newdata=trainset))^2)
+   testerror = mean((testset$count-predict(fit_gam_s,newdata=testset))^2)
+   #print(head(cbind(trainset$mday,trainset$hour,trainset$count,predict(fit_gam_s,newdata=trainset))),20)
+   #print(head(cbind(testset$mday,testset$hour,testset$count,predict(fit_gam_s,newdata=testset))),20)
+   
+   cat("dataset=",dname,"model=gam_s","trainerror=",trainerror,"testerror=",testerror)
+   
+   #analyse the results
+   print(summary(fit_gam_s))
+   plot.Gam(fit_gam_s, se=TRUE, col="green")
+   
+   return(list("dataset"=unique(trainset$name),"model"="gam_s","trainerror"=trainerror,"testerror"=testerror,"fit"=fit_gam_s))
+ }
+ ```
+
+
+```{r}
+func_fit_rf = function(trainset,testset,factorpreds,dname) {
+    formula_string = paste("count~",factorpreds,"+atemp+humidity+windspeed",sep="")
+    print(formula_string)
+    fit_rf = randomForest(as.formula(formula_string),data=trainset,importance=TRUE)
+  print(importance(fit_rf))
+  varImpPlot(fit_rf)
+   trainerror = mean((trainset$count-predict(fit_rf,newdata=trainset))^2)
+   testerror = mean((testset$count-predict(fit_rf,newdata=testset))^2)
+  
+   cat("dataset=",dname,"model=rf","trainerror=",trainerror,"testerror=",testerror)
+   return(list("dataset"=unique(trainset$name),"model"="rf","trainerror"=trainerror,"testerror"=testerror,"fit"=fit_rf))
+ }
+```
+```{r}
+func_fit_boost = function(trainset,testset,factorpreds,dname) {
+    formula_string = paste("count~",factorpreds,"+atemp+humidity+windspeed",sep="")
+    fit_boost = gbm(as.formula(formula_string),data=trainset,distribution="gaussian",n.trees=5000,interaction.depth=4)
+print(summary(fit_boost))
+ trainerror = mean((trainset$count-predict(fit_boost,newdata=trainset,n.trees=5000))^2)
+ testerror = mean((testset$count-predict(fit_boost,newdata=testset,n.trees=5000))^2)
+  
+  cat("dataset=",dname,"model=boost","trainerror=",trainerror,"testerror=",testerror)
+  
+   return(list("dataset"=unique(trainset$name),"model"="boost","trainerror"=trainerror,"testerror"=testerror,"fit"=fit_boost))
+ }
+```
+
+```{r 14}
+ func_fit_models = function(dataset) {
+
+  #create new variable for purposes of data partitioning
+   #create stratified partition based on weather, type of day, month and hour
+  dataset$partgroup = paste(dataset$weather,dataset$typeofday,dataset$mon,sep="_")
+  sample =createDataPartition(dataset$partgroup,p=0.7,list=F)
+  trainset = dataset[sample,]
+  testset = dataset[-sample,]
+
+  #Note: we compared model results (train and test errors) between using year and mon as numeric varaibles vs using them as factor variables (as they should be). There was a big improvement with using them as factor variables. But, for the smaller datasets where all entries all belong to the same month or year, we need to ignore the year or month factor variable.
+  
+  #select factor predictors for this dataset. We only want to include predictors that have at least two entries. Specifically check for season, year and mon
+  dataset_name = unique(dataset$name)
+   factorPreds = "weather+typeofday+wday+hour"
+  #if(sum(table(dataset$season)>0)>1) {
+    #factorPreds = paste(factorPreds,"season",sep="+")
+  #} 
+  if(sum(table(dataset$yearf)>0)>1) {
+    factorPreds = paste(factorPreds,"yearf",sep="+")
+  }
+  if(sum(table(dataset$monf)>0)>1) {
+    factorPreds = paste(factorPreds,"monf",sep="+")
+  }  
+
+  print(factorPreds)
+  
+  #fit lm
+  #model_perf = data.frame(stringsAsFactors = FALSE)
+  model_perf=list()
+  model_perf = rbind(model_perf,func_fit_lm(trainset,testset,factorPreds,dataset_name))
+  model_perf = rbind(model_perf,func_fit_gam_lm(trainset,testset,factorPreds,dataset_name))
+  model_perf = rbind(model_perf,func_fit_gam_poly(trainset,testset,factorPreds,dataset_name))
+  model_perf = rbind(model_perf,func_fit_gam_s(trainset,testset,factorPreds,dataset_name))
+  model_perf = rbind(model_perf,func_fit_rf(trainset,testset,factorPreds,dataset_name))
+ model_perf = rbind(model_perf,func_fit_boost(trainset,testset,factorPreds,dataset_name))
+  model_perf = as.data.frame(model_perf)
+  print(dim(dataset))
+  print(unique(dataset$name))
+  with(model_perf,print(cbind(dataset,model,trainerror,testerror)))
+  #find the model that has the lowest test error
+  print("model with lowest test error")
+  print(model_perf[which.min(model_perf$testerror),c("dataset","model","trainerror","testerror")])
+  return(model_perf[which.min(model_perf$testerror),])
+ }
+```
+
+
+```{r 15}   
+
+bikeTrainFitList_models = do.call(rbind,lapply(bikeTrainIncrList,FUN=function(x) func_fit_models(x)))
+bikeTrainFitList_models[,1:4]
+#str(bikeTrainFitList_models )
+# mse_plot <- ggplot(data=bikeTrainFitList_models)+ #,aes(x=seq(nrow(bikeTrainFitList_models))) +
+#    geom_line(aes(y=trainerror,colour="2")) +
+#    geom_line(aes(y=testerror,colour="3")) +
+#   scale_color_discrete(name = "Errors", labels = c("Train", "Test")) +
+#    ggtitle("Variation in Prediction Error") +
+#    xlab("Number of Months") +
+#    ylab("Prediction Error: MSE") +
+#   theme(legend.position="top")
+#   plot(mse_plot)
+plot(unlist(bikeTrainFitList_models$trainerror),type="l",col=1,xlab="Months",ylab="MSE")
+lines(unlist(bikeTrainFitList_models$testerror),col=2)
+
+```
+
+```{r 16}
+#match the model with the record
+matchModelList = apply(bikeTest2, MARGIN=1, FUN=function(x) bikeTrainFitList_models[which(bikeTrainFitList_models$dataset==getYearMon(x)),])
+length(matchModelList)
+#str(matchModelList)
+matchModelList[[1]]$dataset
+testpred2 = do.call(rbind,lapply(seq(nrow(bikeTest2)),FUN=function(x) as.data.frame(c(bikeTest2$year[x],bikeTest2$mon[x],bikeTest2$mday[x],bikeTest2$hour[x], matchModelList[[x]]$dataset,bikeTest2$count[x],
+      predict(matchModelList[[x]]$fit,newdata=bikeTest2[x,],n.trees=5000)),
+      col.names=c("year","month","mday","hour","dataset","actual_count","predicted_count"))))
+
+#predict with test.csv
+#testpred = do.call(rbind,lapply(seq(nrow(bikeTest)),FUN=function(x) #as.data.frame(c(bikeTest$year[x],bikeTest$mon[x],
+#      matchModelList[[x]]$dataset,bikeTest$count[x],
+#      predict(matchModelList[[x]]$fit,newdata=bikeTest[x,],n.trees=5000)),
+#      col.names=c("year","month","dataset","actual_count","predicted_count"#))))
+
+#print(head(testpred))
+print(testpred2)
+str(testpred2)
+testerror = mean((testpred2$actual_count-testpred2$predicted_count)^2)
+testerror
+
+```
+
+
+
